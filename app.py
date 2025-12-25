@@ -94,136 +94,125 @@ with st.expander("➕ Add Trade"):
 # ================= LOAD DATA =================
 df = load_data()
 
-if not df.empty:
-    df["trade_date"] = pd.to_datetime(df["trade_date"])
-    df["PnL"] = (df["exit"] - df["entry"]) * df["qty"]
-    df["Capital"] = abs(df["entry"] * df["qty"])
-    df["Return"] = df["PnL"] / df["Capital"]
-
-    initial_capital = df["Capital"].iloc[0]
-
-    returns = df["Return"].dropna()
-    downside = returns[returns < 0]
-    sortino = np.nan
-    if len(downside) > 0:
-        downside_dev = np.sqrt((downside**2).mean())
-        sortino = returns.mean() / downside_dev
-
-    equity = initial_capital + df["PnL"].cumsum()
-    drawdown = (equity - equity.cummax()) / equity.cummax() * 100
-
-    tab1,tab2,tab3,tab4,tab5 = st.tabs([
-        "📊 Overview",
-        "📅 Stock-wise Return",
-        "🔥 Risk & Drawdown",
-        "📈 Benchmark (NIFTY)",
-        "💰 Profit Distribution"
-    ])
-
-    def card(c,t,v):
-        c.markdown(
-            f"<div class='metric-card'><div class='metric-title'>{t}</div>"
-            f"<div class='metric-value'>{v}</div></div>",
-            unsafe_allow_html=True
-        )
-
-    # ================= TAB 1 =================
-    with tab1:
-        total_pnl = df["PnL"].sum()
-        abs_ret = (total_pnl / initial_capital) * 100
-
-        c1,c2,c3,c4,c5 = st.columns(5)
-        card(c1,"Total PnL",f"₹ {round(total_pnl,2)}")
-        card(c2,"Return %",round(abs_ret,2))
-        card(c3,"Max Drawdown %",round(drawdown.min(),2))
-        card(c4,"Hit Ratio %",round((df["PnL"]>0).mean()*100,2))
-        card(c5,"Sortino Ratio",round(sortino,2))
-
-        st.line_chart(equity)
-
-    # ================= TAB 2 =================
-    with tab2:
-        stock_perf = df.groupby("symbol").agg(
-            Total_PnL=("PnL","sum"),
-            Capital=("Capital","sum")
-        )
-        stock_perf["Return %"] = (stock_perf["Total_PnL"] / stock_perf["Capital"]) * 100
-        st.dataframe(stock_perf.round(2), use_container_width=True)
-
-    # ================= TAB 3 =================
-    with tab3:
-        st.line_chart(drawdown)
-
-    # ================= TAB 4 BENCHMARK (SAFE) =================
-    with tab4:
-        start, end = equity.index.min(), equity.index.max()
-        nifty = yf.download("^NSEI", start=start, end=end, progress=False)
-
-        if nifty.empty:
-            st.warning("NIFTY data not available currently (Yahoo Finance issue)")
-        else:
-            nifty = nifty["Close"]
-            combined = pd.concat(
-                [equity.rename("RR PMS"), nifty.rename("NIFTY")],
-                axis=1
-            ).dropna()
-
-            norm = combined / combined.iloc[0]
-            st.line_chart(norm)
-
-            pms_ret = (norm["RR PMS"].iloc[-1] - 1) * 100
-            nifty_ret = (norm["NIFTY"].iloc[-1] - 1) * 100
-            outperformance = pms_ret - nifty_ret
-
-            daily_pms = norm["RR PMS"].pct_change().dropna()
-            daily_nifty = norm["NIFTY"].pct_change().dropna()
-
-            beta = np.cov(daily_pms, daily_nifty)[0][1] / np.var(daily_nifty)
-            alpha = pms_ret - (beta * nifty_ret)
-
-            c1,c2,c3 = st.columns(3)
-            card(c1,"NIFTY Return %",round(nifty_ret,2))
-            card(c2,"Outperformance %",round(outperformance,2))
-            card(c3,"Alpha vs NIFTY",round(alpha,2))
-
-    # ================= TAB 5 =================
-    with tab5:
-        capital = st.number_input("Investor Capital",1000000,step=50000)
-        mgmt_fee = capital * 0.02
-        perf_fee = max(total_pnl,0) * 0.20
-        net = total_pnl - mgmt_fee - perf_fee
-
-        c1,c2,c3,c4 = st.columns(4)
-        card(c1,"Gross PnL",round(total_pnl,2))
-        card(c2,"Management Fee (2%)",round(mgmt_fee,2))
-        card(c3,"Performance Fee (20%)",round(perf_fee,2))
-        card(c4,"Investor Net",round(net,2))
-
-    # ================= EDIT / DELETE =================
-    st.markdown("### ✏️ Edit / Delete Trade")
-    trade_id = st.selectbox("Select Trade ID", df["id"])
-    t = df[df["id"]==trade_id].iloc[0]
-
-    with st.form("edit"):
-        d = st.date_input("Date", t["trade_date"])
-        s = st.text_input("Symbol", t["symbol"])
-        q = st.number_input("Qty",1,value=int(t["qty"]))
-        e = st.number_input("Entry",value=float(t["entry"]))
-        x = st.number_input("Exit",value=float(t["exit"]))
-        n = st.text_area("Note", t["note"])
-        col1,col2 = st.columns(2)
-        if col1.form_submit_button("Update"):
-            update_trade(trade_id,str(d),s,e,x,q,n)
-            st.success("Trade Updated")
-        if col2.form_submit_button("Delete"):
-            delete_trade(trade_id)
-            st.warning("Trade Deleted")
-
-    st.markdown("### 📝 Trade Journal")
-    st.dataframe(df, use_container_width=True)
-
-else:
+if df.empty:
     st.info("No trades yet")
+    st.stop()
+
+df["trade_date"] = pd.to_datetime(df["trade_date"])
+df["PnL"] = (df["exit"] - df["entry"]) * df["qty"]
+df["Capital"] = abs(df["entry"] * df["qty"])
+df["Return"] = df["PnL"] / df["Capital"]
+
+initial_capital = df["Capital"].iloc[0]
+equity = initial_capital + df["PnL"].cumsum()
+drawdown = (equity - equity.cummax()) / equity.cummax() * 100
+
+returns = df["Return"].dropna()
+downside = returns[returns < 0]
+sortino = np.nan
+if len(downside) > 0:
+    sortino = returns.mean() / np.sqrt((downside**2).mean())
+
+# ================= TABS =================
+tab1,tab2,tab3,tab4,tab5 = st.tabs([
+    "📊 Overview",
+    "📅 Stock-wise Return",
+    "🔥 Risk & Drawdown",
+    "📈 Benchmark (NIFTY)",
+    "💰 Profit Distribution"
+])
+
+def card(c,t,v):
+    c.markdown(
+        f"<div class='metric-card'><div class='metric-title'>{t}</div>"
+        f"<div class='metric-value'>{v}</div></div>",
+        unsafe_allow_html=True
+    )
+
+# ================= TAB 1 =================
+with tab1:
+    total_pnl = df["PnL"].sum()
+    abs_ret = (total_pnl / initial_capital) * 100
+
+    c1,c2,c3,c4,c5 = st.columns(5)
+    card(c1,"Total PnL",f"₹ {round(total_pnl,2)}")
+    card(c2,"Return %",round(abs_ret,2))
+    card(c3,"Max Drawdown %",round(drawdown.min(),2))
+    card(c4,"Hit Ratio %",round((df["PnL"]>0).mean()*100,2))
+    card(c5,"Sortino Ratio",round(sortino,2))
+
+    st.line_chart(equity)
+
+# ================= TAB 2 =================
+with tab2:
+    stock_perf = df.groupby("symbol").agg(
+        Total_PnL=("PnL","sum"),
+        Capital=("Capital","sum")
+    )
+    stock_perf["Return %"] = (stock_perf["Total_PnL"]/stock_perf["Capital"])*100
+    st.dataframe(stock_perf.round(2), use_container_width=True)
+
+# ================= TAB 3 =================
+with tab3:
+    st.line_chart(drawdown)
+
+# ================= TAB 4 (ULTRA SAFE BENCHMARK) =================
+with tab4:
+    st.info("Benchmark comparison uses Yahoo Finance (may be unavailable sometimes).")
+
+    try:
+        nifty = yf.download("^NSEI", period="1y", progress=False)
+        if nifty.empty:
+            st.warning("NIFTY data not available")
+        else:
+            nifty_close = nifty["Close"]
+            pms_norm = equity / equity.iloc[0]
+            nifty_norm = nifty_close / nifty_close.iloc[0]
+
+            combined = pd.DataFrame({
+                "RR PMS": pms_norm[-len(nifty_norm):].values,
+                "NIFTY": nifty_norm.values
+            })
+
+            st.line_chart(combined)
+    except Exception as e:
+        st.warning("Benchmark temporarily unavailable")
+
+# ================= TAB 5 =================
+with tab5:
+    capital = st.number_input("Investor Capital",1000000,step=50000)
+    mgmt_fee = capital * 0.02
+    perf_fee = max(total_pnl,0) * 0.20
+    net = total_pnl - mgmt_fee - perf_fee
+
+    c1,c2,c3,c4 = st.columns(4)
+    card(c1,"Gross PnL",round(total_pnl,2))
+    card(c2,"Management Fee (2%)",round(mgmt_fee,2))
+    card(c3,"Performance Fee (20%)",round(perf_fee,2))
+    card(c4,"Investor Net",round(net,2))
+
+# ================= EDIT / DELETE =================
+st.markdown("### ✏️ Edit / Delete Trade")
+trade_id = st.selectbox("Select Trade ID", df["id"])
+t = df[df["id"]==trade_id].iloc[0]
+
+with st.form("edit"):
+    d = st.date_input("Date", t["trade_date"])
+    s = st.text_input("Symbol", t["symbol"])
+    q = st.number_input("Qty",1,value=int(t["qty"]))
+    e = st.number_input("Entry",value=float(t["entry"]))
+    x = st.number_input("Exit",value=float(t["exit"]))
+    n = st.text_area("Note", t["note"])
+    col1,col2 = st.columns(2)
+    if col1.form_submit_button("Update"):
+        update_trade(trade_id,str(d),s,e,x,q,n)
+        st.success("Trade Updated")
+    if col2.form_submit_button("Delete"):
+        delete_trade(trade_id)
+        st.warning("Trade Deleted")
+
+st.markdown("### 📝 Trade Journal")
+st.dataframe(df, use_container_width=True)
 
 st.markdown("""
 <hr>
