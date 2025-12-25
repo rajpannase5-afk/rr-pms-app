@@ -103,12 +103,15 @@ if not df.empty:
     initial_capital = df["Capital"].iloc[0]
 
     # ================= SORTINO RATIO =================
+    target_return = 0
     returns = df["Return"].dropna()
-    downside = returns[returns < 0]
+    downside_returns = returns[returns < target_return]
 
-    if len(downside) > 0:
-        downside_dev = np.sqrt((downside ** 2).mean())
-        sortino_ratio = returns.mean() / downside_dev
+    if len(downside_returns) > 0:
+        downside_deviation = np.sqrt(
+            ((downside_returns - target_return) ** 2).sum() / len(returns)
+        )
+        sortino_ratio = (returns.mean() - target_return) / downside_deviation
     else:
         sortino_ratio = np.nan
 
@@ -140,12 +143,12 @@ if not df.empty:
         card(c1,"Total PnL",f"₹ {round(total_pnl,2)}")
         card(c2,"Return %",round(abs_ret,2))
         card(c3,"Max Drawdown %",round(drawdown.min(),2))
-        card(c4,"Hit Ratio %",round((df['PnL']>0).mean()*100,2))
+        card(c4,"Hit Ratio %",round((df["PnL"]>0).mean()*100,2))
         card(c5,"Sortino Ratio",round(sortino_ratio,2))
 
         st.line_chart(equity)
 
-    # ================= TAB 2 =================
+    # ================= TAB 2 STOCK-WISE RETURN =================
     with tab2:
         stock_perf = df.groupby("symbol").agg(
             Total_PnL=("PnL","sum"),
@@ -154,35 +157,47 @@ if not df.empty:
         stock_perf["Return %"] = (stock_perf["Total_PnL"] / stock_perf["Capital"]) * 100
         st.dataframe(stock_perf.round(2), use_container_width=True)
 
-    # ================= TAB 3 =================
+    # ================= TAB 3 RISK =================
     with tab3:
         st.line_chart(drawdown)
 
-    # ================= TAB 4 BENCHMARK (SAFE) =================
+    # ================= TAB 4 BENCHMARK =================
     with tab4:
-        try:
-            daily_pnl = df.groupby("trade_date")["PnL"].sum()
-            equity = initial_capital + daily_pnl.cumsum()
+        daily_pnl = df.groupby("trade_date")["PnL"].sum()
+        equity = initial_capital + daily_pnl.cumsum()
 
-            start, end = equity.index.min(), equity.index.max()
+        start, end = equity.index.min(), equity.index.max()
 
-            nifty_df = yf.download("^NSEI", start=start, end=end, progress=False)
-            nifty = nifty_df["Close"]
+        nifty = yf.download("^NSEI", start=start, end=end, progress=False)[["Close"]]
+        nifty = nifty.squeeze()
 
-            pms_norm = equity / equity.iloc[0]
-            nifty_norm = nifty / nifty.iloc[0]
+        pms_norm = equity / equity.iloc[0]
+        nifty_norm = nifty / nifty.iloc[0]
+        pms_norm = pms_norm.reindex(nifty_norm.index, method="ffill")
 
-            comp = pd.concat([
-                pms_norm.rename("RR PMS"),
-                nifty_norm.rename("NIFTY 50")
-            ], axis=1).dropna()
+        comp = pd.DataFrame({
+            "RR PMS": pms_norm,
+            "NIFTY 50": nifty_norm
+        }).dropna()
 
-            st.line_chart(comp)
+        st.line_chart(comp)
 
-        except Exception:
-            st.warning("NIFTY data unavailable")
+        pms_ret = (pms_norm.iloc[-1] - 1) * 100
+        nifty_ret = (nifty_norm.iloc[-1] - 1) * 100
+        outperformance = pms_ret - nifty_ret
 
-    # ================= TAB 5 =================
+        daily_pms = comp["RR PMS"].pct_change().dropna()
+        daily_nifty = comp["NIFTY 50"].pct_change().dropna()
+
+        beta = np.cov(daily_pms, daily_nifty)[0][1] / np.var(daily_nifty)
+        alpha = pms_ret - (beta * nifty_ret)
+
+        c1,c2,c3 = st.columns(3)
+        card(c1,"NIFTY Return %",round(nifty_ret,2))
+        card(c2,"Outperformance %",round(outperformance,2))
+        card(c3,"Alpha vs NIFTY",round(alpha,2))
+
+    # ================= TAB 5 PROFIT =================
     with tab5:
         capital = st.number_input("Investor Capital",1000000,step=50000)
         mgmt_fee = capital * 0.02
