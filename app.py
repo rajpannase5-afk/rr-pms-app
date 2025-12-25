@@ -1,0 +1,244 @@
+import streamlit as st
+import sqlite3
+import pandas as pd
+import numpy as np
+import yfinance as yf
+from datetime import date
+
+# ================= PAGE CONFIG =================
+st.set_page_config(
+    page_title="RR PMS Pvt Ltd | PMS Dashboard",
+    page_icon="📊",
+    layout="wide"
+)
+
+# ================= CSS =================
+st.markdown("""
+<style>
+body { background-color:#0E1117; }
+.block-container { padding-top:1rem; }
+.metric-card {
+    background:#161B22;
+    padding:18px;
+    border-radius:14px;
+    text-align:center;
+}
+.metric-title { color:#9CA3AF;font-size:13px; }
+.metric-value { font-size:26px;font-weight:700;color:#22C55E; }
+hr { background:#222;height:1px;border:none; }
+</style>
+""", unsafe_allow_html=True)
+
+# ================= DATABASE =================
+conn = sqlite3.connect("trades.db", check_same_thread=False)
+c = conn.cursor()
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT,
+    symbol TEXT,
+    entry REAL,
+    exit REAL,
+    qty INTEGER,
+    note TEXT
+)
+""")
+conn.commit()
+
+def load_data():
+    return pd.read_sql("SELECT * FROM trades ORDER BY trade_date", conn)
+
+def add_trade(d,s,e,x,q,n):
+    c.execute(
+        "INSERT INTO trades (trade_date,symbol,entry,exit,qty,note) VALUES (?,?,?,?,?,?)",
+        (d,s.upper(),e,x,q,n)
+    )
+    conn.commit()
+
+def update_trade(i,d,s,e,x,q,n):
+    c.execute("""
+        UPDATE trades SET trade_date=?, symbol=?, entry=?, exit=?, qty=?, note=?
+        WHERE id=?
+    """,(d,s.upper(),e,x,q,n,i))
+    conn.commit()
+
+def delete_trade(i):
+    c.execute("DELETE FROM trades WHERE id=?", (i,))
+    conn.commit()
+
+# ================= HEADER =================
+st.markdown("""
+<div style="background:#161B22;padding:22px;border-radius:16px;">
+<h1 style="margin:0;color:#F8FAFC;">RR PMS Pvt Ltd</h1>
+<p style="color:#9CA3AF;">Professional Portfolio Management Services</p>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("<hr>", unsafe_allow_html=True)
+
+# ================= ADD TRADE =================
+with st.expander("➕ Add Trade"):
+    with st.form("add"):
+        c1,c2,c3 = st.columns(3)
+        d = c1.date_input("Date", date.today())
+        s = c2.text_input("Symbol")
+        q = c3.number_input("Qty",1,step=1)
+        e = st.number_input("Entry",0.0)
+        x = st.number_input("Exit",0.0)
+        n = st.text_area("Trade Note")
+        if st.form_submit_button("Add Trade"):
+            add_trade(str(d),s,e,x,q,n)
+            st.success("Trade Added")
+
+# ================= LOAD DATA =================
+df = load_data()
+
+if not df.empty:
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["PnL"] = (df["exit"] - df["entry"]) * df["qty"]
+    df["Capital"] = abs(df["entry"] * df["qty"])
+    df["Return"] = df["PnL"] / df["Capital"]
+
+    initial_capital = df["Capital"].iloc[0]
+
+    # ================= SORTINO RATIO =================
+    target_return = 0
+    returns = df["Return"].dropna()
+    downside_returns = returns[returns < target_return]
+
+    if len(downside_returns) > 0:
+        downside_deviation = np.sqrt(
+            ((downside_returns - target_return) ** 2).sum() / len(returns)
+        )
+        sortino_ratio = (returns.mean() - target_return) / downside_deviation
+    else:
+        sortino_ratio = np.nan
+
+    tab1,tab2,tab3,tab4,tab5 = st.tabs([
+        "📊 Overview",
+        "📅 Stock-wise Return",
+        "🔥 Risk & Drawdown",
+        "📈 Benchmark (NIFTY)",
+        "💰 Profit Distribution"
+    ])
+
+    # ================= TAB 1 OVERVIEW =================
+    with tab1:
+        total_pnl = df["PnL"].sum()
+        abs_ret = (total_pnl / initial_capital) * 100
+
+        equity = initial_capital + df["PnL"].cumsum()
+        drawdown = (equity - equity.cummax()) / equity.cummax() * 100
+
+        c1,c2,c3,c4,c5 = st.columns(5)
+
+        def card(c,t,v):
+            c.markdown(
+                f"<div class='metric-card'><div class='metric-title'>{t}</div>"
+                f"<div class='metric-value'>{v}</div></div>",
+                unsafe_allow_html=True
+            )
+
+        card(c1,"Total PnL",f"₹ {round(total_pnl,2)}")
+        card(c2,"Return %",round(abs_ret,2))
+        card(c3,"Max Drawdown %",round(drawdown.min(),2))
+        card(c4,"Hit Ratio %",round((df["PnL"]>0).mean()*100,2))
+        card(c5,"Sortino Ratio",round(sortino_ratio,2))
+
+        st.line_chart(equity)
+
+    # ================= TAB 2 STOCK-WISE RETURN =================
+    with tab2:
+        stock_perf = df.groupby("symbol").agg(
+            Total_PnL=("PnL","sum"),
+            Capital=("Capital","sum")
+        )
+        stock_perf["Return %"] = (stock_perf["Total_PnL"] / stock_perf["Capital"]) * 100
+        st.dataframe(stock_perf.round(2), use_container_width=True)
+
+    # ================= TAB 3 RISK =================
+    with tab3:
+        st.line_chart(drawdown)
+
+    # ================= TAB 4 BENCHMARK =================
+    with tab4:
+        daily_pnl = df.groupby("trade_date")["PnL"].sum()
+        equity = initial_capital + daily_pnl.cumsum()
+
+        start, end = equity.index.min(), equity.index.max()
+
+        nifty = yf.download("^NSEI", start=start, end=end, progress=False)[["Close"]]
+        nifty = nifty.squeeze()
+
+        pms_norm = equity / equity.iloc[0]
+        nifty_norm = nifty / nifty.iloc[0]
+        pms_norm = pms_norm.reindex(nifty_norm.index, method="ffill")
+
+        comp = pd.DataFrame({
+            "RR PMS": pms_norm,
+            "NIFTY 50": nifty_norm
+        }).dropna()
+
+        st.line_chart(comp)
+
+        pms_ret = (pms_norm.iloc[-1] - 1) * 100
+        nifty_ret = (nifty_norm.iloc[-1] - 1) * 100
+        outperformance = pms_ret - nifty_ret
+
+        daily_pms = comp["RR PMS"].pct_change().dropna()
+        daily_nifty = comp["NIFTY 50"].pct_change().dropna()
+
+        beta = np.cov(daily_pms, daily_nifty)[0][1] / np.var(daily_nifty)
+        alpha = pms_ret - (beta * nifty_ret)
+
+        c1,c2,c3 = st.columns(3)
+        card(c1,"NIFTY Return %",round(nifty_ret,2))
+        card(c2,"Outperformance %",round(outperformance,2))
+        card(c3,"Alpha vs NIFTY",round(alpha,2))
+
+    # ================= TAB 5 PROFIT =================
+    with tab5:
+        capital = st.number_input("Investor Capital",1000000,step=50000)
+        mgmt_fee = capital * 0.02
+        perf_fee = max(total_pnl,0) * 0.20
+        net = total_pnl - mgmt_fee - perf_fee
+
+        c1,c2,c3,c4 = st.columns(4)
+        card(c1,"Gross PnL",round(total_pnl,2))
+        card(c2,"Management Fee (2%)",round(mgmt_fee,2))
+        card(c3,"Performance Fee (20%)",round(perf_fee,2))
+        card(c4,"Investor Net",round(net,2))
+
+    # ================= EDIT / DELETE =================
+    st.markdown("### ✏️ Edit / Delete Trade")
+    trade_id = st.selectbox("Select Trade ID", df["id"])
+    t = df[df["id"]==trade_id].iloc[0]
+
+    with st.form("edit"):
+        d = st.date_input("Date", t["trade_date"])
+        s = st.text_input("Symbol", t["symbol"])
+        q = st.number_input("Qty",1,value=int(t["qty"]))
+        e = st.number_input("Entry",value=float(t["entry"]))
+        x = st.number_input("Exit",value=float(t["exit"]))
+        n = st.text_area("Note", t["note"])
+        col1,col2 = st.columns(2)
+        if col1.form_submit_button("Update"):
+            update_trade(trade_id,str(d),s,e,x,q,n)
+            st.success("Trade Updated")
+        if col2.form_submit_button("Delete"):
+            delete_trade(trade_id)
+            st.warning("Trade Deleted")
+
+    st.markdown("### 📝 Trade Journal")
+    st.dataframe(df, use_container_width=True)
+
+else:
+    st.info("No trades yet")
+
+st.markdown("""
+<hr>
+<p style="text-align:center;color:#6B7280;font-size:12px;">
+© RR PMS Pvt Ltd | Confidential PMS System
+</p>
+""", unsafe_allow_html=True)
