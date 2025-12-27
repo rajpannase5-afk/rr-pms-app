@@ -9,9 +9,9 @@ import yfinance as yf
 st.set_page_config(page_title="RR PMS Dashboard", layout="wide")
 
 # ================== SUPABASE ==================
-SUPABASE_URL = "PASTE_YOUR_PROJECT_URL_HERE"
-SUPABASE_KEY = "PASTE_YOUR_ANON_PUBLIC_KEY_HERE"
 
+SUPABASE_URL = "https://ywbtpcfhwritehcyli.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...."
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ================== HELPERS ==================
@@ -164,3 +164,4 @@ except Exception:
 
 # ================== FOOTER ==================
 st.caption("Data stored permanently in Supabase • Trade Edit/Delete SAFE • RLS Enabled")
+
